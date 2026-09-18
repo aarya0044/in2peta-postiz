@@ -1,0 +1,11 @@
+{
+  "name": "admin-approval-portal",
+  "version": "1.0.0",
+  "description": "Custom Client Admin & Post Approval Portal for Postiz & Google Gemini",
+  "scripts": {
+    "start": "node server/server.js",
+    "build": "cd client && npm run build",
+    "dev:server": "node --watch server/server.js",
+    "dev:client": "cd client && npm run dev"
+  }
+}
