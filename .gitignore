@@ -9,6 +9,8 @@ dist/
 # Local media uploads (preserve directory with .gitkeep)
 server/uploads/*
 !server/uploads/.gitkeep
+server/data/tunnel.txt
+server/data/data.json
 
 # Environment variables & secrets
 .env

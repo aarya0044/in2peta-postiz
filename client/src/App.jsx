@@ -77,6 +77,7 @@ export default function App() {
 
   // STEP 1: in2peta Media
   const [attachedMediaUrl, setAttachedMediaUrl] = useState(SAMPLE_IN2PETA_MEDIA[0].url);
+  const [attachedMediaId, setAttachedMediaId] = useState(null);
   const [attachedMediaType, setAttachedMediaType] = useState('image'); // 'image' | 'video'
   const [mediaSourceType, setMediaSourceType] = useState('sample'); // 'sample' | 'url' | 'upload'
   const [pastedUrlInput, setPastedUrlInput] = useState('');
@@ -102,7 +103,7 @@ export default function App() {
   const [expandedCaption, setExpandedCaption] = useState(false);
 
   // Queue & Modals
-  const [queueFilter, setQueueFilter] = useState('PENDING_REVIEW');
+  const [queueFilter, setQueueFilter] = useState('ALL');
   const [editingPost, setEditingPost] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
 
@@ -193,6 +194,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setAttachedMediaUrl(data.url);
+        setAttachedMediaId(data.postizMediaId || null);
         showToast(`Attached ${isVideo ? 'video' : 'image'} from in2peta!`, 'success');
       }
     } catch {
@@ -214,6 +216,7 @@ export default function App() {
       pastedUrlInput.includes('video');
 
     setAttachedMediaUrl(pastedUrlInput.trim());
+    setAttachedMediaId(null);
     setAttachedMediaType(isVideo ? 'video' : 'image');
     setMediaSourceType('url');
     showToast('Media URL linked to Instagram preview!', 'success');
@@ -237,6 +240,8 @@ export default function App() {
           tone,
           callToAction,
           mediaUrl: attachedMediaUrl,
+          mediaId: attachedMediaId,
+          postizMediaId: attachedMediaId,
           mediaType: attachedMediaType,
           scheduledDate: new Date(scheduledDate).toISOString(),
           integrationId: activeChannel?.id,
@@ -257,7 +262,7 @@ export default function App() {
       if (data.autoApproved) {
         showToast('⚡ Caption generated & automatically scheduled in Postiz!', 'success');
       } else {
-        showToast('✨ Caption crafted! Check the Instagram preview.', 'success');
+        showToast('✨ Caption crafted! Check the Instagram preview below.', 'success');
       }
     } catch (err) {
       showToast(err.message, 'error');
@@ -275,7 +280,9 @@ export default function App() {
       if (!res.ok) throw new Error(data.error || 'Approval failed');
 
       showToast('🎉 Approved! Post is scheduled in Postiz for Instagram.', 'success');
-      fetchData();
+      await fetchData();
+      setActiveTab('queue');
+      setQueueFilter('ALL');
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -1119,10 +1126,10 @@ export default function App() {
 
               <div className="flex flex-wrap gap-1 bg-black/40 p-1 rounded-2xl border border-white/5 text-xs">
                 {[
+                  { key: 'ALL', label: 'All Posts', count: queueData.counts?.total || 0 },
                   { key: 'PENDING_REVIEW', label: 'Pending Review', count: queueData.counts?.pending || 0 },
                   { key: 'SCHEDULED', label: 'Scheduled', count: queueData.counts?.scheduled || 0 },
                   { key: 'REJECTED', label: 'Archived', count: queueData.counts?.rejected || 0 },
-                  { key: 'ALL', label: 'All Posts', count: queueData.counts?.total || 0 },
                 ].map((tab) => (
                   <button
                     key={tab.key}

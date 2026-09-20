@@ -57,13 +57,17 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
 
     const postizRes = await fetch(`${CONFIG.POSTIZ_API_URL}/upload`, {
       method: 'POST',
-      headers: PostizService.getHeaders(),
+      headers: {
+        'Authorization': CONFIG.POSTIZ_API_KEY,
+      },
       body: form,
     });
 
     if (postizRes.ok) {
       postizUpload = await postizRes.json();
       console.log('✅ File uploaded directly to Postiz store:', postizUpload);
+    } else {
+      console.warn('Postiz upload failed with status:', postizRes.status, await postizRes.text());
     }
   } catch (err) {
     console.warn('Postiz direct file sync warning:', err.message);
@@ -183,6 +187,8 @@ app.post('/api/generate', async (req, res) => {
       scheduledDate,
       integrationId,
       mediaUrl,
+      mediaId,
+      postizMediaId,
       mediaType = 'image', // 'image' | 'video'
       autoApproveOverride,
     } = req.body;
@@ -225,6 +231,7 @@ app.post('/api/generate', async (req, res) => {
 
     const chosenMediaUrl =
       mediaUrl || 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?w=1080&auto=format&fit=crop&q=80';
+    const chosenMediaId = postizMediaId || mediaId || null;
 
     // 3. Auto-publish if Auto-Approval is ON
     if (shouldAutoApprove && finalIntegrationId) {
@@ -236,6 +243,7 @@ app.post('/api/generate', async (req, res) => {
           type: 'schedule',
           mediaUrl: chosenMediaUrl,
           mediaType,
+          mediaId: chosenMediaId,
         });
         status = 'SCHEDULED';
       } catch (err) {
@@ -255,6 +263,7 @@ app.post('/api/generate', async (req, res) => {
       visualPrompt: generated.visualPrompt,
       visualKeyword: generated.visualKeyword,
       visualUrl: chosenMediaUrl,
+      postizMediaId: chosenMediaId,
       mediaType,
       reelStoryboard: generated.reelStoryboard,
       fullPostText,

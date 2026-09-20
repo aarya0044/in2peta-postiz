@@ -101,6 +101,7 @@ export class QueueService {
       scheduledDate: postItem.scheduledDate || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       status: postItem.status || 'PENDING_REVIEW',
       postizPostId: postItem.postizPostId || null,
+      postizMediaId: postItem.postizMediaId || null,
       createdAt: now,
       updatedAt: now,
       reviewNotes: postItem.reviewNotes || '',

@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const DATA_DIR = path.join(__dirname, 'data');
+const TUNNEL_FILE = path.join(DATA_DIR, 'tunnel.txt');
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const CLOUDFLARED_PATH = path.join(PROJECT_ROOT, 'cloudflared.exe');
 
@@ -14,64 +16,115 @@ export class TunnelService {
   static childProcess = null;
 
   /**
+   * Read persisted tunnel URL from disk if available
+   */
+  static getPersistedUrl() {
+    try {
+      if (fs.existsSync(TUNNEL_FILE)) {
+        const url = fs.readFileSync(TUNNEL_FILE, 'utf-8').trim();
+        if (url.startsWith('https://') && url.includes('.trycloudflare.com')) {
+          return url;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Save tunnel URL to disk
+   */
+  static savePersistedUrl(url) {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(TUNNEL_FILE, url, 'utf-8');
+    } catch (err) {
+      console.warn('Could not persist tunnel URL:', err.message);
+    }
+  }
+
+  static kill() {
+    if (this.childProcess) {
+      try {
+        if (process.platform === 'win32' && this.childProcess.pid) {
+          spawn('taskkill', ['/pid', this.childProcess.pid.toString(), '/f', '/t']);
+        } else {
+          this.childProcess.kill();
+        }
+      } catch {}
+      this.childProcess = null;
+    }
+    this.cachedHostname = null;
+    try {
+      if (fs.existsSync(TUNNEL_FILE)) {
+        fs.unlinkSync(TUNNEL_FILE);
+      }
+    } catch {}
+  }
+
+  /**
    * Get the current live Cloudflare Quick Tunnel public URL
    */
   static async getTunnelUrl() {
-    // Check cache (refresh every 30 seconds)
-    if (this.cachedHostname && Date.now() - this.lastChecked < 30000) {
+    // 1. If child process is running and hostname is cached, return it
+    if (this.childProcess && this.cachedHostname && Date.now() - this.lastChecked < 60000) {
       return `https://${this.cachedHostname}`;
     }
 
-    // 1. Try querying the active metrics/quicktunnel endpoint
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 1500);
-      const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: controller.signal });
-      clearTimeout(timeout);
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.hostname) {
-          this.cachedHostname = data.hostname;
-          this.lastChecked = Date.now();
-          return `https://${this.cachedHostname}`;
-        }
-      }
-    } catch {
-      // Tunnel not answering on metrics port yet
-    }
-
-    // 2. Try starting cloudflared if available and not yet started
+    // 2. If cloudflared binary exists and process isn't spawned yet, spawn it and listen to stderr
     if (fs.existsSync(CLOUDFLARED_PATH) && !this.childProcess) {
       try {
-        console.log('🚀 Launching Cloudflare Tunnel for Postiz media delivery...');
+        console.log('🚀 Starting Cloudflare Tunnel for Postiz media publishing...');
         this.childProcess = spawn(CLOUDFLARED_PATH, ['tunnel', '--url', 'http://localhost:4007'], {
-          detached: true,
-          stdio: 'ignore',
+          stdio: ['ignore', 'pipe', 'pipe'],
         });
-        this.childProcess.unref();
 
-        // Wait briefly for quicktunnel to initialize
-        for (let i = 0; i < 6; i++) {
+        const handleOutput = (chunk) => {
+          const text = chunk.toString();
+          if (text.includes('Unauthorized: Tunnel not found')) {
+            console.warn('⚠️ Cloudflare quick tunnel expired. Refreshing tunnel...');
+            this.kill();
+            return;
+          }
+          const match = text.match(/https:\/\/([a-zA-Z0-9-]+\.trycloudflare\.com)/);
+          if (match && match[1]) {
+            this.cachedHostname = match[1];
+            this.lastChecked = Date.now();
+            const fullUrl = `https://${this.cachedHostname}`;
+            this.savePersistedUrl(fullUrl);
+            console.log(`✅ Cloudflare Tunnel ready: ${fullUrl}`);
+          }
+        };
+
+        this.childProcess.stdout.on('data', handleOutput);
+        this.childProcess.stderr.on('data', handleOutput);
+
+        this.childProcess.on('error', (err) => {
+          console.error('Cloudflared process error:', err.message);
+          this.childProcess = null;
+        });
+
+        this.childProcess.on('exit', () => {
+          this.childProcess = null;
+        });
+
+        // Wait up to 10 seconds for initial URL detection
+        for (let i = 0; i < 10; i++) {
+          if (this.cachedHostname) break;
           await new Promise((r) => setTimeout(r, 1000));
-          try {
-            const res = await fetch('http://127.0.0.1:20241/quicktunnel');
-            if (res.ok) {
-              const data = await res.json();
-              if (data?.hostname) {
-                this.cachedHostname = data.hostname;
-                this.lastChecked = Date.now();
-                console.log(`✅ Cloudflare Tunnel live: https://${this.cachedHostname}`);
-                return `https://${this.cachedHostname}`;
-              }
-            }
-          } catch {}
         }
       } catch (err) {
-        console.error('Could not auto-start cloudflared:', err.message);
+        console.error('Failed to spawn Cloudflare Tunnel:', err.message);
       }
     }
 
-    return this.cachedHostname ? `https://${this.cachedHostname}` : null;
+    if (this.cachedHostname) {
+      return `https://${this.cachedHostname}`;
+    }
+
+    // Fallback to persisted URL
+    return this.getPersistedUrl();
   }
 
   /**
@@ -93,8 +146,14 @@ export class TunnelService {
         return mediaUrl.replace(/https?:\/\/(localhost|127\.0\.0\.1):4007/, tunnelBase);
       }
     }
+    if (mediaUrl.includes('localhost:3005') || mediaUrl.includes('127.0.0.1:3005')) {
+      if (tunnelBase) {
+        return mediaUrl.replace(/https?:\/\/(localhost|127\.0\.0\.1):3005/, tunnelBase);
+      }
+    }
 
-    // If it's already a public HTTPS URL, return as is
+    // If it's already an existing tunnel URL or public HTTPS URL, return as is
     return mediaUrl;
   }
 }
+

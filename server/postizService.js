@@ -1,5 +1,12 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { CONFIG } from './config.js';
 import { TunnelService } from './tunnelService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const LOCAL_UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 export class PostizService {
   static getHeaders() {
@@ -35,8 +42,41 @@ export class PostizService {
     if (!mediaUrl) return null;
 
     try {
-      // 1. If it's already a local Postiz /uploads path, convert via Cloudflare Tunnel
-      if (mediaUrl.includes('/uploads/') || mediaUrl.includes('localhost:4007') || mediaUrl.includes('127.0.0.1:4007')) {
+      // 1. Check if this is a local file in our server/uploads folder (e.g. in2peta_media_...)
+      const filenameMatch = mediaUrl.match(/in2peta_media_[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+/);
+      if (filenameMatch) {
+        const localFilePath = path.join(LOCAL_UPLOADS_DIR, filenameMatch[0]);
+        if (fs.existsSync(localFilePath)) {
+          console.log('🔄 Syncing local server upload to Postiz storage:', filenameMatch[0]);
+          const fileBuf = fs.readFileSync(localFilePath);
+          const ext = path.extname(localFilePath).slice(1).toLowerCase();
+          const mimeType = ext === 'png' ? 'image/png' : ext === 'mp4' ? 'video/mp4' : 'image/jpeg';
+
+          const form = new FormData();
+          form.append('file', new Blob([fileBuf], { type: mimeType }), filenameMatch[0]);
+
+          const uploadRes = await fetch(`${CONFIG.POSTIZ_API_URL}/upload`, {
+            method: 'POST',
+            headers: {
+              'Authorization': CONFIG.POSTIZ_API_KEY,
+            },
+            body: form,
+          });
+
+          if (uploadRes.ok) {
+            const uploadData = await uploadRes.json();
+            const publicUrl = await TunnelService.toPublicMediaUrl(uploadData.path);
+            console.log(`✅ Local file synced to Postiz & Cloudflare: ${publicUrl}`);
+            return {
+              id: uploadData.id || mediaId || 'media_' + Date.now(),
+              path: publicUrl,
+            };
+          }
+        }
+      }
+
+      // 2. If it's already a Postiz /uploads path, convert via Cloudflare Tunnel
+      if (mediaUrl.includes('localhost:4007') || mediaUrl.includes('127.0.0.1:4007') || (mediaUrl.includes('.trycloudflare.com') && mediaUrl.includes('/uploads/'))) {
         const publicUrl = await TunnelService.toPublicMediaUrl(mediaUrl);
         return {
           id: mediaId || 'media_' + Date.now(),
