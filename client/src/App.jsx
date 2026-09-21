@@ -74,6 +74,7 @@ export default function App() {
   const [settings, setSettings] = useState({ autoApprove: false });
   const [queueData, setQueueData] = useState({ counts: {}, queue: [] });
   const [publishedPosts, setPublishedPosts] = useState([]);
+  const [healthInfo, setHealthInfo] = useState(null);
 
   // STEP 1: in2peta Media
   const [attachedMediaUrl, setAttachedMediaUrl] = useState(SAMPLE_IN2PETA_MEDIA[0].url);
@@ -117,11 +118,12 @@ export default function App() {
   // Initial Data Fetch
   const fetchData = async () => {
     try {
-      const [settingsRes, channelsRes, queueRes, pubRes] = await Promise.all([
+      const [settingsRes, channelsRes, queueRes, pubRes, healthRes] = await Promise.all([
         fetch('/api/settings'),
         fetch('/api/channels'),
         fetch('/api/queue'),
         fetch('/api/published'),
+        fetch('/api/health'),
       ]);
 
       if (settingsRes.ok) setSettings(await settingsRes.json());
@@ -132,6 +134,7 @@ export default function App() {
       }
       if (queueRes.ok) setQueueData(await queueRes.json());
       if (pubRes.ok) setPublishedPosts(await pubRes.json());
+      if (healthRes.ok) setHealthInfo(await healthRes.json());
     } catch (err) {
       console.error('Data fetch error:', err);
     }
@@ -430,7 +433,26 @@ export default function App() {
           </div>
 
           {/* Right Header Controls */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* S3 Storage Status Badge */}
+            {healthInfo?.s3Storage && (
+              <div
+                className={`hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
+                  healthInfo.s3Storage.connected
+                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                    : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                }`}
+                title={
+                  healthInfo.s3Storage.connected
+                    ? `AWS S3 Bucket: in2peta-postiz-media (Role: PostizMediaUploadRole active)`
+                    : `AWS S3 Standby (${healthInfo.s3Storage.error || 'Needs [default] profile'}). Cloudflare Bridge active.`
+                }
+              >
+                <span className={`w-2 h-2 rounded-full ${healthInfo.s3Storage.connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                <span>{healthInfo.s3Storage.connected ? 'S3 Bucket Active' : 'S3 Ready (Bridge Mode)'}</span>
+              </div>
+            )}
+
             {/* Quick in2peta Explore Button */}
             <a
               href={IN2PETA_EXPLORE_URL}

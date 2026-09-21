@@ -9,6 +9,7 @@ import { GeminiService } from './geminiService.js';
 import { PostizService } from './postizService.js';
 import { QueueService } from './queueService.js';
 import { TunnelService } from './tunnelService.js';
+import { S3Service } from './s3Service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,7 +40,8 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 /**
  * Direct Media Upload (For images or videos generated from in2peta)
- * Automatically synchronizes with Postiz storage and translates to public tunnel URL
+ * Automatically uploads to AWS S3 (with IAM role assumption), registers in Postiz,
+ * and falls back to Cloudflare Tunnel if S3 credentials are being configured.
  */
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   if (!req.file) {
@@ -47,10 +49,19 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
   }
 
   const isVideo = req.file.mimetype.startsWith('video/');
+  const fileBuffer = fs.readFileSync(req.file.path);
+  let s3Url = null;
   let postizUpload = null;
 
+  // 1. Attempt upload to AWS S3 bucket (in2peta-postiz-media)
   try {
-    const fileBuffer = fs.readFileSync(req.file.path);
+    s3Url = await S3Service.uploadMedia(fileBuffer, req.file.originalname, req.file.mimetype);
+  } catch (err) {
+    console.warn('S3 upload notice:', err.message);
+  }
+
+  // 2. Also register in Postiz storage
+  try {
     const blob = new Blob([fileBuffer], { type: req.file.mimetype });
     const form = new FormData();
     form.append('file', blob, req.file.originalname);
@@ -65,7 +76,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
 
     if (postizRes.ok) {
       postizUpload = await postizRes.json();
-      console.log('✅ File uploaded directly to Postiz store:', postizUpload);
+      console.log('✅ File registered in Postiz store:', postizUpload);
     } else {
       console.warn('Postiz upload failed with status:', postizRes.status, await postizRes.text());
     }
@@ -73,16 +84,20 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
     console.warn('Postiz direct file sync warning:', err.message);
   }
 
-  // Resolve public HTTPS URL (via Cloudflare tunnel)
-  let publicUrl = `/uploads/${req.file.filename}`;
-  if (postizUpload?.path) {
-    publicUrl = await TunnelService.toPublicMediaUrl(postizUpload.path);
-  } else {
-    publicUrl = await TunnelService.toPublicMediaUrl(publicUrl);
+  // 3. Resolve public HTTPS URL: Prioritize AWS S3 permanent URL, fallback to Cloudflare Tunnel
+  let publicUrl = s3Url;
+  if (!publicUrl) {
+    if (postizUpload?.path) {
+      publicUrl = await TunnelService.toPublicMediaUrl(postizUpload.path);
+    } else {
+      publicUrl = await TunnelService.toPublicMediaUrl(`/uploads/${req.file.filename}`);
+    }
   }
 
   res.json({
     url: publicUrl,
+    s3Url: s3Url || null,
+    storageEngine: s3Url ? 'AWS S3 (in2peta-postiz-media)' : 'Cloudflare Tunnel (Local)',
     localUrl: `/uploads/${req.file.filename}`,
     filename: req.file.filename,
     mimetype: req.file.mimetype,
@@ -94,12 +109,13 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
 });
 
 /**
- * Clean Platform Status
+ * Clean Platform Status (including S3 and Tunnel)
  */
 app.get('/api/health', async (req, res) => {
   const integrations = await PostizService.getIntegrations();
   const settings = QueueService.getSettings();
   const tunnelUrl = await TunnelService.getTunnelUrl();
+  const s3Status = await S3Service.checkStatus();
 
   res.json({
     status: 'healthy',
@@ -109,6 +125,7 @@ app.get('/api/health', async (req, res) => {
     activeAccount: integrations.length > 0 ? integrations[0].name : 'No account linked',
     autoApprove: settings.autoApprove,
     tunnelUrl: tunnelUrl || 'Local Mode',
+    s3Storage: s3Status,
   });
 });
 
