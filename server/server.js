@@ -153,7 +153,7 @@ app.get('/api/channels', async (req, res) => {
       id: ch.id,
       name: ch.name,
       handle: `@${ch.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-      platform: 'instagram',
+      platform: ch.identifier || 'facebook',
       followers: '14.2K',
       postsCount: 128,
       avatar: ch.picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',

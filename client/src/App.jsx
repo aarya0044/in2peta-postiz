@@ -170,7 +170,7 @@ export default function App() {
     }
   };
 
-  // Handle File Upload from computer (in2peta generated image/video)
+  // Handle File Upload from computer (in2peta generated image/video or gallery)
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -179,12 +179,12 @@ export default function App() {
     const isVideo = file.type.startsWith('video/');
     setAttachedMediaType(isVideo ? 'video' : 'image');
 
-    // Immediate local object preview
+    // Immediate local object preview for user responsiveness
     const localUrl = URL.createObjectURL(file);
     setAttachedMediaUrl(localUrl);
     setMediaSourceType('upload');
 
-    // Upload to server
+    // Upload to server & S3
     const formData = new FormData();
     formData.append('media', file);
 
@@ -198,10 +198,15 @@ export default function App() {
         const data = await res.json();
         setAttachedMediaUrl(data.url);
         setAttachedMediaId(data.postizMediaId || null);
-        showToast(`Attached ${isVideo ? 'video' : 'image'} from in2peta!`, 'success');
+        showToast(`☁️ Attached ${isVideo ? 'video' : 'image'} (Stored in S3)!`, 'success');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.error || 'Upload failed. Please try again.', 'error');
+        setAttachedMediaUrl(SAMPLE_IN2PETA_MEDIA[0].url);
       }
     } catch {
-      showToast('File loaded for local preview', 'info');
+      showToast('Media upload failed. Please try again.', 'error');
+      setAttachedMediaUrl(SAMPLE_IN2PETA_MEDIA[0].url);
     } finally {
       setIsUploading(false);
     }
@@ -230,6 +235,16 @@ export default function App() {
     const activeTopic = overrideTopic || topic;
     if (!activeTopic.trim()) {
       showToast('Please enter a topic or click one of the idea chips.', 'error');
+      return;
+    }
+
+    if (isUploading) {
+      showToast('Please wait, media is currently uploading to AWS S3...', 'info');
+      return;
+    }
+
+    if (attachedMediaUrl && attachedMediaUrl.startsWith('blob:')) {
+      showToast('Media is still uploading to cloud storage. Please wait a moment...', 'error');
       return;
     }
 
@@ -483,7 +498,7 @@ export default function App() {
                   {activeChannel?.handle || '@mytestpage'}
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
                 </span>
-                <span className="text-[10px] text-slate-400">Instagram Connected</span>
+                <span className="text-[10px] text-slate-400 capitalize">{activeChannel?.platform || 'Social'} Connected</span>
               </div>
             </div>
 
@@ -745,13 +760,13 @@ export default function App() {
                       className="p-6 rounded-2xl border-2 border-dashed border-white/15 hover:border-lime-400/50 bg-white/[0.02] flex flex-col items-center justify-center text-center gap-2 transition-all cursor-pointer"
                     >
                       <div className="w-10 h-10 rounded-full bg-lime-500/10 text-lime-400 flex items-center justify-center">
-                        <Upload className="w-5 h-5" />
+                        {isUploading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
                       </div>
                       <div>
                         <span className="text-xs font-semibold text-white block">
-                          {isUploading ? 'Uploading to preview...' : 'Click to browse image or video from in2peta'}
+                          {isUploading ? 'Uploading directly to AWS S3...' : 'Click to browse image or video from gallery'}
                         </span>
-                        <span className="text-[11px] text-slate-400">Supports PNG, JPG, MP4, WebM (Max 50MB)</span>
+                        <span className="text-[11px] text-slate-400">Permanently hosted on S3 &bullet; Supports PNG, JPG, MP4 (Max 50MB)</span>
                       </div>
                     </div>
                   )}
@@ -872,7 +887,7 @@ export default function App() {
                 <div className="pt-2 flex justify-end">
                   <button
                     type="button"
-                    disabled={isGenerating || !topic.trim()}
+                    disabled={isGenerating || isUploading || !topic.trim()}
                     onClick={() => handleGenerateCaption()}
                     className={`flex items-center gap-2 font-bold px-6 py-3 rounded-2xl text-white shadow-xl shadow-rose-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer ${INSTA_GRADIENT} hover:opacity-95`}
                   >
@@ -880,6 +895,11 @@ export default function App() {
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
                         <span>Writing Caption & Hook...</span>
+                      </>
+                    ) : isUploading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Uploading Media to S3...</span>
                       </>
                     ) : (
                       <>
