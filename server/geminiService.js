@@ -57,45 +57,61 @@ Respond ONLY with a valid JSON object matching the following structure (no markd
       },
     };
 
-    let res = null;
-    let attempts = 0;
-    const maxAttempts = 3;
+    const candidateModels = [
+      CONFIG.GEMINI_MODEL || 'gemini-3.5-flash',
+      'gemini-3.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-3.8-flash',
+    ];
+    const uniqueModels = [...new Set(candidateModels)];
 
-    while (attempts < maxAttempts) {
-      attempts++;
-      try {
-        res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
+    let rawText = null;
+    let lastError = null;
 
-        if (res.ok) break;
+    for (const model of uniqueModels) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
-        if (res.status === 503 || res.status === 429) {
-          console.warn(`Gemini API busy (${res.status}), retrying in ${attempts * 1500}ms...`);
-          await new Promise((r) => setTimeout(r, attempts * 1500));
-          continue;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (rawText) {
+              console.log(`✨ Successfully generated caption using ${model}`);
+              break;
+            }
+          }
+
+          if (res.status === 503 || res.status === 429) {
+            console.warn(`⚠️ Model ${model} busy (${res.status}). Attempt ${attempt}/2...`);
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+            continue;
+          }
+
+          const errorText = await res.text();
+          lastError = new Error(`AI error (${res.status}): ${errorText}`);
+          break; // Try next model on non-transient error
+        } catch (err) {
+          lastError = err;
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1000));
         }
-
-        const errorText = await res.text();
-        throw new Error(`in2peta AI error (${res.status}): ${errorText}`);
-      } catch (err) {
-        if (attempts >= maxAttempts) throw err;
-        await new Promise((r) => setTimeout(r, attempts * 1500));
       }
-    }
 
-    if (!res || !res.ok) {
-      const errorText = await res?.text?.() || 'Service unavailable';
-      throw new Error(`in2peta AI error (${res?.status || 500}): ${errorText}`);
+      if (rawText) break; // Success! No need to try further fallback models
+      console.log(`🔄 Switching to next fallback model...`);
     }
-
-    const data = await res.json();
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!rawText) {
-      throw new Error('No content returned from in2peta AI');
+      throw lastError || new Error('AI service is temporarily busy due to peak demand. Please try again in a few moments.');
     }
 
     let cleanJson = rawText.trim();
@@ -104,6 +120,13 @@ Respond ONLY with a valid JSON object matching the following structure (no markd
     if (cleanJson.endsWith('```')) cleanJson = cleanJson.slice(0, -3);
     cleanJson = cleanJson.trim();
 
+    // Extract between outermost JSON braces if extra text exists
+    const firstBrace = cleanJson.indexOf('{');
+    const lastBrace = cleanJson.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
+    }
+
     try {
       const parsed = JSON.parse(cleanJson);
       return parsed;
@@ -111,9 +134,9 @@ Respond ONLY with a valid JSON object matching the following structure (no markd
       return {
         hook: topic.slice(0, 120),
         caption: rawText,
-        hashtags: ['#in2peta', '#instagramgrowth', '#creators'],
+        hashtags: ['#database', '#postgresql', '#tech', '#coding', '#developer'],
         visualPrompt: 'A vibrant, modern photo representing ' + topic,
-        visualKeyword: 'modern lifestyle',
+        visualKeyword: 'database schema diagram',
         reelStoryboard: null,
       };
     }
